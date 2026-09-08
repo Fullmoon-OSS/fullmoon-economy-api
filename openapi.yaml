@@ -105,8 +105,10 @@ paths:
         - name: username
           in: path
           required: true
-          pattern: '^[A-Za-z0-9_]{3,16}$'
-          schema: { type: string }
+          description: Minecraft username (3-16 chars, letters/digits/underscore).
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_]{3,16}$'
       responses:
         '200':
           description: Linked wallet found.
