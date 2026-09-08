@@ -1,0 +1,24 @@
+{
+  "name": "fullmoon-economy-api",
+  "version": "1.0.0",
+  "description": "Shared-economy HTTP API: multiple Discord bots, one PostgreSQL ledger (single source of truth). Read-only.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "author": "personnya",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fullmoon-OSS/fullmoon-economy-api.git"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "pg": "^8.16.1"
+  }
+}
