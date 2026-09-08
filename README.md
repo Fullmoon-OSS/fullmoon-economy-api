@@ -118,7 +118,7 @@ nginx의 IP당 10 req/s(burst 40) 제한은 **앱 리미터가 못 막는 구간
 `TX_FILTERS`)을 사용하므로 수치가 어긋날 수 없다.
 ```json
 { "ok": true, "totalSupply": 5000, "accounts": 42,
-  "today": { "mint": 300, "burn": -120, "casinoNet": -45, "auctionNet": -8, "dropNet": 0, "shopNet": -60, "net": 67 },
+  "today": { "mint": 300, "burn": -120, "casinoNet": -45, "auctionNet": -8, "dropNet": 0, "shopNet": -60, "transferTax": 5, "net": 67 },
   "bySource": [{ "source": "plugin:survival", "faucet": 200, "sink": 0, "net": 200 }] }
 ```
 
