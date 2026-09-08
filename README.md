@@ -166,3 +166,9 @@ COPY 헤더를 참고하세요).
 ```bash
 npm test   # DB 불필요 — fake pool로 HTTP 전면 검증해요 (405 벽 포함)
 ```
+
+## 기계 가독 명세
+
+[`openapi.yaml`](./openapi.yaml)(OpenAPI 3.1) — 모든 엔드포인트·응답 형태·에러
+의미의 기계 판독용 계약이에요. LLM 에이전트나 코드 생성 도구, Swagger UI가 이걸
+읽으면 됩니다. 사람용 상세 설명은 위 README가 담당해요.

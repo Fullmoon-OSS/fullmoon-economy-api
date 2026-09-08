@@ -1,0 +1,396 @@
+openapi: 3.1.0
+info:
+  title: Fullmoon Economy API
+  version: 1.0.0
+  summary: Read-only HTTP API over the Fullmoon shared-economy PostgreSQL ledger.
+  description: |
+    Multiple Discord bots, dashboards and clients read ONE PostgreSQL ledger
+    (single source of truth). This API is READ-ONLY by construction: there is
+    no code path from an HTTP request to a balance write, and every non-GET
+    request is refused with 405 before authentication or body parsing.
+
+    Base URL (public, behind nginx TLS): https://api.fullmoon.ink/economy
+    Base URL (operator-local): http://127.0.0.1:8790
+
+    Auth: `Authorization: Bearer <key>` on everything except /v1/health.
+    Keys carry no scopes - the only power is reading the ledger.
+
+    Error model: 401 (bad key) and 429 (rate limited) and 5xx are operator
+    problems; 404 is a normal business result (no such account/record).
+    Any non-GET method returns 405 with `Allow: GET` before auth.
+
+    Rate limits: app layer 60 req/10s per client key (env-tunable);
+    nginx layer 10 req/s per IP, burst 40.
+
+    Client: the official zero-dependency JS client is
+    https://github.com/Fullmoon-OSS/fullmoon-sdk (economyClient.js).
+servers:
+  - url: https://api.fullmoon.ink/economy
+    description: Public entry (nginx TLS termination, /economy prefix stripped by proxy_pass)
+  - url: http://127.0.0.1:8790
+    description: Operator-local (binds 127.0.0.1 only)
+security:
+  - bearerAuth: []
+tags:
+  - name: health
+  - name: accounts
+  - name: aggregates
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Liveness + read-only flag (no auth).
+      security: []
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, service, readOnly]
+                properties:
+                  ok: { type: boolean, const: true }
+                  service: { type: string, const: economy-api }
+                  readOnly: { type: boolean, const: true }
+  /v1/accounts/{discordId}:
+    get:
+      operationId: getAccount
+      tags: [accounts]
+      summary: One account's balance and link state.
+      description: Returns 404 when the account does not exist yet - accounts are created on first activity, so treat 404 as "no wallet yet", not as an error.
+      parameters:
+        - $ref: '#/components/parameters/DiscordId'
+      responses:
+        '200':
+          description: Account found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/accounts/{discordId}/transactions:
+    get:
+      operationId: getAccountTransactions
+      tags: [accounts]
+      summary: One account's recent ledger entries, newest first.
+      parameters:
+        - $ref: '#/components/parameters/DiscordId'
+        - $ref: '#/components/parameters/Limit50'
+      responses:
+        '200':
+          description: Ledger entries (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, transactions]
+                properties:
+                  ok: { type: boolean, const: true }
+                  transactions:
+                    type: array
+                    items: { $ref: '#/components/schemas/LedgerEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/accounts/by-mc/{username}:
+    get:
+      operationId: getWalletByMc
+      tags: [accounts]
+      summary: Wallet + recent entries looked up by Minecraft username (launcher/client shaped).
+      description: Resolves the most recently linked account for the given Minecraft username. 404 when nothing is linked.
+      parameters:
+        - name: username
+          in: path
+          required: true
+          pattern: '^[A-Za-z0-9_]{3,16}$'
+          schema: { type: string }
+      responses:
+        '200':
+          description: Linked wallet found.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, wallet, transactions]
+                properties:
+                  ok: { type: boolean, const: true }
+                  wallet:
+                    type: object
+                    required: [currency, balance, updatedAt]
+                    properties:
+                      currency: { type: string, const: '원' }
+                      balance: { type: number }
+                      updatedAt: { type: string, format: date-time }
+                  transactions:
+                    type: array
+                    maxItems: 30
+                    items:
+                      type: object
+                      properties:
+                        delta: { type: number }
+                        reason: { type: string }
+                        label: { type: string, description: Korean display label from the ledger vocabulary }
+                        balanceAfter: { type: [number, 'null'] }
+                        at: { type: string, format: date-time }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/leaderboard:
+    get:
+      operationId: getLeaderboard
+      tags: [aggregates]
+      summary: Richest accounts, positive balances only.
+      parameters:
+        - $ref: '#/components/parameters/Limit50'
+      responses:
+        '200':
+          description: Ranked entries (rank starts at 1).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, leaderboard]
+                properties:
+                  ok: { type: boolean, const: true }
+                  leaderboard:
+                    type: array
+                    items:
+                      type: object
+                      required: [rank, discordId, balance]
+                      properties:
+                        rank: { type: integer }
+                        discordId: { type: [string, 'null'] }
+                        mcUsername: { type: [string, 'null'] }
+                        balance: { type: number }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/config:
+    get:
+      operationId: getConfig
+      tags: [aggregates]
+      summary: Shared balance knobs (reward.multiplier, faucet.daily_cap, ...).
+      description: Read these instead of hardcoding numbers. Values change only from the operator side; clients cache ~30s.
+      responses:
+        '200':
+          description: All economy_config rows, ordered by key.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, config]
+                properties:
+                  ok: { type: boolean, const: true }
+                  config:
+                    type: array
+                    items:
+                      type: object
+                      required: [key, value]
+                      properties:
+                        key: { type: string }
+                        value: { type: number }
+                        description: { type: [string, 'null'] }
+                        updatedBy: { type: [string, 'null'] }
+                        updatedAt: { type: [string, 'null'], format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/overview:
+    get:
+      operationId: getOverview
+      tags: [aggregates]
+      summary: Headline numbers - total supply, account count, today's mint/burn breakdown.
+      description: Uses the SAME classification SQL (TX_FILTERS) as the bot's /경제현황 command, so a third-party dashboard cannot disagree with in-Discord numbers.
+      responses:
+        '200':
+          description: Aggregates for today (UTC).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, totalSupply, accounts, today, bySource]
+                properties:
+                  ok: { type: boolean, const: true }
+                  totalSupply: { type: number }
+                  accounts: { type: integer }
+                  today:
+                    type: object
+                    properties:
+                      mint: { type: number }
+                      burn: { type: number }
+                      casinoNet: { type: number }
+                      auctionNet: { type: number }
+                      dropNet: { type: number }
+                      shopNet: { type: number }
+                      transferTax: { type: number }
+                      net: { type: number }
+                  bySource:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        source: { type: string }
+                        faucet: { type: number }
+                        sink: { type: number }
+                        net: { type: number }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/stats/daily:
+    get:
+      operationId: getDailyStats
+      tags: [aggregates]
+      summary: Per-day time series for charts.
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 90, default: 14 }
+      responses:
+        '200':
+          description: One row per day (UTC), ascending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, days]
+                properties:
+                  ok: { type: boolean, const: true }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        mint: { type: number }
+                        burn: { type: number }
+                        casinoNet: { type: number }
+                        auctionNet: { type: number }
+                        dropNet: { type: number }
+                        shopNet: { type: number }
+                        net: { type: number }
+                        activeAccounts: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/transactions/recent:
+    get:
+      operationId: getRecentTransactions
+      tags: [aggregates]
+      summary: Global live transaction feed (account info joined), newest first.
+      description: Poll at 5s or slower.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Feed entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, transactions]
+                properties:
+                  ok: { type: boolean, const: true }
+                  transactions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        discordId: { type: [string, 'null'] }
+                        mcUsername: { type: [string, 'null'] }
+                        delta: { type: number }
+                        balanceAfter: { type: [number, 'null'] }
+                        reason: { type: string }
+                        source: { type: string }
+                        createdAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/casino/today:
+    get:
+      operationId: getCasinoToday
+      tags: [aggregates]
+      summary: Casino ledger snapshot for today (UTC) per game.
+      description: netBurn > 0 means the casino is deflationary (healthy invariant).
+      responses:
+        '200':
+          description: Per-game wagered/paidOut/netBurn.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, games]
+                properties:
+                  ok: { type: boolean, const: true }
+                  games:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        game: { type: string }
+                        wagered: { type: number }
+                        paidOut: { type: number }
+                        netBurn: { type: number }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Operator-issued key (32+ chars). No scopes - read access is the only power.
+  parameters:
+    DiscordId:
+      name: discordId
+      in: path
+      required: true
+      description: Discord snowflake (5-25 digits).
+      schema: { type: string, pattern: '^\d{5,25}$' }
+    Limit50:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+  responses:
+    NotFound:
+      description: Business result - the account/record does not exist (not an operator error).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Unauthorized:
+      description: Missing or invalid bearer key - contact the operator.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    RateLimited:
+      description: Over the per-client limit (default 60 req/10s) - back off and retry.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+  schemas:
+    Account:
+      type: object
+      required: [ok, discordId, balance, linked]
+      properties:
+        ok: { type: boolean, const: true }
+        discordId: { type: string }
+        balance: { type: number }
+        linked: { type: boolean, description: true when both a Discord id and an MC uuid are bound }
+        mcUsername: { type: [string, 'null'] }
+    LedgerEntry:
+      type: object
+      properties:
+        delta: { type: number }
+        balanceAfter: { type: [number, 'null'] }
+        reason: { type: string, description: Machine reason code, e.g. discord.daily, casino.slots.wager, economy.playtime }
+        source: { type: string, description: Where it happened, e.g. bot, plugin:survival, dashboard:admin }
+        refId: { type: [string, 'null'], description: Idempotency key }
+        createdAt: { type: string, format: date-time }
+    ErrorBody:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: { type: boolean, const: false }
+        error: { type: string }
+        hint: { type: string }
