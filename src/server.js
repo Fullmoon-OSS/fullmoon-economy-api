@@ -90,7 +90,10 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     if (accountMatch) {
       const r = await pool.query(
         `SELECT a.discord_id, a.mc_username, a.linked_at IS NOT NULL AS linked,
-                COALESCE(b.amount, 0) AS amount
+                COALESCE(b.amount, 0) AS amount,
+                CASE WHEN COALESCE(b.amount, 0) > 0
+                     THEN (SELECT COUNT(*) + 1 FROM balances b2 WHERE b2.amount > b.amount)
+                     ELSE NULL END AS rank
          FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
          WHERE a.discord_id = $1`,
         [accountMatch[1]]
@@ -103,26 +106,35 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
         balance: Number(row.amount),
         linked: row.linked,
         mcUsername: row.mc_username ?? null,
+        rank: row.rank === null ? null : Number(row.rank),
       });
     }
 
     const txMatch = path.match(/^\/v1\/accounts\/(\d{5,25})\/transactions$/);
     if (txMatch) {
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 10, 1), 50);
+      // before = id 커서: 이보다 오래된 항목만 (CSV 내보내기 같은 페이지네이션용).
+      const beforeRaw = Number(url.searchParams.get('before')) || 0;
+      const before = beforeRaw > 0 ? beforeRaw : null;
       const r = await pool.query(
-        `SELECT t.delta, t.balance_after, t.reason, t.source, t.ref_id, t.created_at
+        `SELECT t.id, t.delta, t.balance_after, t.reason, t.source, t.ref_id, t.created_at
          FROM transactions t JOIN accounts a ON a.id = t.account_id
-         WHERE a.discord_id = $1 ORDER BY t.created_at DESC LIMIT $2`,
-        [txMatch[1], limit]
+         WHERE a.discord_id = $1 ${before ? 'AND t.id < $3' : ''}
+         ORDER BY t.id DESC LIMIT $2`,
+        before ? [txMatch[1], limit, before] : [txMatch[1], limit]
       );
+      const transactions = r.rows.map((t) => ({
+        id: Number(t.id),
+        delta: Number(t.delta),
+        balanceAfter: t.balance_after === null ? null : Number(t.balance_after),
+        reason: t.reason, source: t.source, refId: t.ref_id,
+        createdAt: t.created_at instanceof Date ? t.created_at.toISOString() : t.created_at,
+      }));
       return send(res, 200, {
         ok: true,
-        transactions: r.rows.map((t) => ({
-          delta: Number(t.delta),
-          balanceAfter: t.balance_after === null ? null : Number(t.balance_after),
-          reason: t.reason, source: t.source, refId: t.ref_id,
-          createdAt: t.created_at instanceof Date ? t.created_at.toISOString() : t.created_at,
-        })),
+        transactions,
+        // 다음 페이지용 커서: 이번 페이지의 가장 오래된 항목 id. 더 없으면 null.
+        nextBefore: transactions.length === limit ? transactions[transactions.length - 1].id : null,
       });
     }
 
@@ -253,23 +265,29 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
 
     if (path === '/v1/transactions/recent') {
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
+      const beforeRaw = Number(url.searchParams.get('before')) || 0;
+      const before = beforeRaw > 0 ? beforeRaw : null;
       const r = await pool.query(
-        `SELECT a.discord_id, a.mc_username, t.delta, t.balance_after, t.reason, t.source, t.created_at
+        `SELECT t.id, a.discord_id, a.mc_username, t.delta, t.balance_after, t.reason, t.source, t.created_at
            FROM transactions t JOIN accounts a ON a.id = t.account_id
-          ORDER BY t.created_at DESC, t.id DESC LIMIT $1`,
-        [limit]
+          ${before ? 'WHERE t.id < $2' : ''}
+          ORDER BY t.id DESC LIMIT $1`,
+        before ? [limit, before] : [limit]
       );
+      const transactions = r.rows.map((t) => ({
+        id: Number(t.id),
+        discordId: t.discord_id === null ? null : String(t.discord_id),
+        mcUsername: t.mc_username ?? null,
+        delta: Number(t.delta),
+        balanceAfter: t.balance_after === null ? null : Number(t.balance_after),
+        reason: t.reason,
+        source: t.source,
+        createdAt: t.created_at instanceof Date ? t.created_at.toISOString() : t.created_at,
+      }));
       return send(res, 200, {
         ok: true,
-        transactions: r.rows.map((t) => ({
-          discordId: t.discord_id === null ? null : String(t.discord_id),
-          mcUsername: t.mc_username ?? null,
-          delta: Number(t.delta),
-          balanceAfter: t.balance_after === null ? null : Number(t.balance_after),
-          reason: t.reason,
-          source: t.source,
-          createdAt: t.created_at instanceof Date ? t.created_at.toISOString() : t.created_at,
-        })),
+        transactions,
+        nextBefore: transactions.length === limit ? transactions[transactions.length - 1].id : null,
       });
     }
 
@@ -282,6 +300,69 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
         ok: true,
         games: r.rows.map((row) => ({
           game: row.game,
+          wagered: Number(row.total_wagered),
+          paidOut: Number(row.total_paid_out),
+          netBurn: Number(row.net_burn),
+        })),
+      });
+    }
+
+    // -- community module reads -------------------------------------------------
+    // 이 경로들은 데모 모듈을 실제로 만들다가 발견한 갭들이다 (EventTracker,
+    // GuildBoard, CasinoMonitor 시나리오). 같은 규칙: GET 전용, clamp, 원장 읽기.
+
+    // EventScheduler가 쓰는 events 테이블의 진행 중 이벤트. 이벤트 타이머 봇이
+    // 폴링하는 용도 — 쓰기는 여전히 운영자 봇만 가능하다.
+    if (path === '/v1/events') {
+      const r = await pool.query(
+        `SELECT name, kind, multiplier, starts_at, ends_at
+           FROM events WHERE active = true
+          ORDER BY starts_at ASC LIMIT 25`
+      );
+      return send(res, 200, {
+        ok: true,
+        events: r.rows.map((e) => ({
+          name: e.name,
+          kind: e.kind,
+          multiplier: Number(e.multiplier),
+          startsAt: e.starts_at instanceof Date ? e.starts_at.toISOString() : e.starts_at,
+          endsAt: e.ends_at instanceof Date ? e.ends_at.toISOString() : e.ends_at,
+        })),
+      });
+    }
+
+    // 길드 랭킹 보드용: 기금 내림차순 길드 목록 + 멤버 수.
+    if (path === '/v1/guilds') {
+      const r = await pool.query(
+        `SELECT g.name, g.fund_balance, COUNT(m.account_id)::int AS members
+           FROM guilds g LEFT JOIN guild_members m ON m.guild_id = g.id
+          GROUP BY g.id, g.name, g.fund_balance
+          ORDER BY g.fund_balance DESC, g.name ASC LIMIT 25`
+      );
+      return send(res, 200, {
+        ok: true,
+        guilds: r.rows.map((g) => ({
+          name: g.name,
+          fund: Number(g.fund_balance),
+          members: Number(g.members),
+        })),
+      });
+    }
+
+    // 카지노 건전성 모니터용 일별 이력: net_burn >= 0이면 디플레이션 정상.
+    if (path === '/v1/casino/history') {
+      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 90);
+      const r = await pool.query(
+        `SELECT period::text AS date, total_wagered, total_paid_out, net_burn
+           FROM casino_ledger
+          WHERE period >= (now() AT TIME ZONE 'UTC')::date - ($1 - 1)
+          ORDER BY period ASC`,
+        [days]
+      );
+      return send(res, 200, {
+        ok: true,
+        days: r.rows.map((row) => ({
+          date: row.date,
           wagered: Number(row.total_wagered),
           paidOut: Number(row.total_paid_out),
           netBurn: Number(row.net_burn),

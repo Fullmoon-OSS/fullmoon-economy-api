@@ -81,9 +81,13 @@ nginx의 IP당 10 req/s(burst 40) 제한은 **앱 리미터가 못 막는 구간
 `{ ok, service, readOnly: true }`
 
 ### `GET /v1/accounts/:discordId`
-`{ ok, discordId, balance, linked, mcUsername }` · 계정이 없으면 404예요
+`{ ok, discordId, balance, linked, mcUsername, rank }` · 계정이 없으면 404예요.
+`rank`는 잔액 순위(1 = 최고 부자)예요. 잔액이 0이면 순위가 없어서 null이에요.
 
-### `GET /v1/accounts/:discordId/transactions?limit=10` (limit ≤ 50)
+### `GET /v1/accounts/:discordId/transactions?limit=10&before=<id>` (limit ≤ 50)
+각 항목에 원장 `id`가 있고, 응답의 `nextBefore`를 다음 요청의 `before`로 넘기면
+이전 페이지가 나와요(전체 내역 내보내기 같은 페이지네이션용). 더 없으면
+`nextBefore`가 null이에요.
 
 ### `GET /v1/accounts/by-mc/:username`
 런처·게임 클라이언트용이에요 — Discord id 대신 **MC 사용자명**으로 읽어요. 연동된
@@ -133,6 +137,18 @@ nginx의 IP당 10 req/s(burst 40) 제한은 **앱 리미터가 못 막는 구간
 
 ### `GET /v1/casino/today`
 `casino_ledger` 오늘 스냅샷이에요: 게임별 `{ game, wagered, paidOut, netBurn }`.
+
+### `GET /v1/casino/history?days=30` (days ≤ 90)
+카지노 일별 이력이에요: `{ date, wagered, paidOut, netBurn }[]`. `netBurn ≥ 0`이면
+그날 카지노가 돈을 태운 거라 정상, 음수면 인플레이션 신호예요 (건전성 모니터용).
+
+### `GET /v1/events`
+EventScheduler가 띄운 진행 중 이벤트예요: `{ name, kind, multiplier, startsAt, endsAt }[]`.
+이벤트 타이머 봇이 폴링하는 용도예요. 이벤트 생성은 여전히 운영자만 할 수 있어요.
+
+### `GET /v1/guilds`
+길드 목록이에요 (기금 내림차순, 최대 25): `{ name, fund, members }[]`.
+기금은 길드 자금 메타데이터라 유통량에 포함되지 않아요.
 
 ## 클라이언트 구현 메모 (다른 봇 개발자에게)
 

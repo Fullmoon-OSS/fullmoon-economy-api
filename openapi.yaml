@@ -80,9 +80,10 @@ paths:
       parameters:
         - $ref: '#/components/parameters/DiscordId'
         - $ref: '#/components/parameters/Limit50'
+        - $ref: '#/components/parameters/BeforeCursor'
       responses:
         '200':
-          description: Ledger entries (possibly empty).
+          description: Ledger entries (possibly empty). Includes nextBefore - the id cursor for the next (older) page, null when this is the last one.
           content:
             application/json:
               schema:
@@ -93,6 +94,9 @@ paths:
                   transactions:
                     type: array
                     items: { $ref: '#/components/schemas/LedgerEntry' }
+                  nextBefore:
+                    type: [integer, 'null']
+                    description: Pass as the before query parameter to fetch the next (older) page; null when you have reached the beginning.
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /v1/accounts/by-mc/{username}:
@@ -283,6 +287,7 @@ paths:
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - $ref: '#/components/parameters/BeforeCursor'
       responses:
         '200':
           description: Feed entries.
@@ -298,6 +303,7 @@ paths:
                     items:
                       type: object
                       properties:
+                        id: { type: integer }
                         discordId: { type: [string, 'null'] }
                         mcUsername: { type: [string, 'null'] }
                         delta: { type: number }
@@ -334,6 +340,89 @@ paths:
                         netBurn: { type: number }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/events:
+    get:
+      operationId: getEvents
+      tags: [aggregates]
+      summary: Currently active events (the EventScheduler's table).
+      description: Poll-friendly read for event timer bots. Writing events stays operator-only.
+      responses:
+        '200':
+          description: Active events, soonest start first (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, events]
+                properties:
+                  ok: { type: boolean, const: true }
+                  events:
+                    type: array
+                    maxItems: 25
+                    items:
+                      type: object
+                      required: [name, kind, multiplier, startsAt]
+                      properties:
+                        name: { type: string }
+                        kind: { type: string, description: e.g. drop_rate, faucet_boost, casino_jackpot_boost }
+                        multiplier: { type: number }
+                        startsAt: { type: string, format: date-time }
+                        endsAt: { type: [string, 'null'], description: null = runs until deactivated }
+  /v1/guilds:
+    get:
+      operationId: getGuilds
+      tags: [aggregates]
+      summary: Guild list ranked by fund balance, with member counts.
+      responses:
+        '200':
+          description: Up to 25 guilds, richest fund first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, guilds]
+                properties:
+                  ok: { type: boolean, const: true }
+                  guilds:
+                    type: array
+                    maxItems: 25
+                    items:
+                      type: object
+                      required: [name, fund, members]
+                      properties:
+                        name: { type: string }
+                        fund: { type: number, description: Guild fund balance (metadata, not circulating supply) }
+                        members: { type: integer }
+  /v1/casino/history:
+    get:
+      operationId: getCasinoHistory
+      tags: [aggregates]
+      summary: Per-day casino burn history (health monitoring).
+      description: netBurn >= 0 means the casino destroyed value that day (healthy); negative means it inflated the ledger.
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 90, default: 30 }
+      responses:
+        '200':
+          description: One row per day with activity, ascending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, days]
+                properties:
+                  ok: { type: boolean, const: true }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      required: [date, wagered, paidOut, netBurn]
+                      properties:
+                        date: { type: string, format: date }
+                        wagered: { type: number }
+                        paidOut: { type: number }
+                        netBurn: { type: number }
 components:
   securitySchemes:
     bearerAuth:
@@ -351,6 +440,11 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+    BeforeCursor:
+      name: before
+      in: query
+      description: Ledger id cursor - return only entries older than this id. Pass the nextBefore value from the previous page.
+      schema: { type: integer, minimum: 1 }
   responses:
     NotFound:
       description: Business result - the account/record does not exist (not an operator error).
@@ -380,9 +474,11 @@ components:
         balance: { type: number }
         linked: { type: boolean, description: true when both a Discord id and an MC uuid are bound }
         mcUsername: { type: [string, 'null'] }
+        rank: { type: [number, 'null'], description: Ledger ranking by balance (1 = richest). null while the balance is zero - zero-balance accounts are unranked. }
     LedgerEntry:
       type: object
       properties:
+        id: { type: integer, description: Ledger id - pass as the before cursor to page backwards }
         delta: { type: number }
         balanceAfter: { type: [number, 'null'] }
         reason: { type: string, description: Machine reason code, e.g. discord.daily, casino.slots.wager, economy.playtime }

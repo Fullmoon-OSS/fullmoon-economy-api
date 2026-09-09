@@ -92,25 +92,48 @@ test('reads: account 404 vs shape, leaderboard shape', async () => {
   poolRows = { rows: [], rowCount: 0 };
   assert.equal((await req('/v1/accounts/123456789', { key: KEY })).status, 404);
 
-  poolRows = { rows: [{ discord_id: '123456789', mc_username: 'Steve', linked: true, amount: '250.0000' }], rowCount: 1 };
+  poolRows = { rows: [{ discord_id: '123456789', mc_username: 'Steve', linked: true, amount: '250.0000', rank: '2' }], rowCount: 1 };
   const acc = await (await req('/v1/accounts/123456789', { key: KEY })).json();
-  assert.deepEqual(acc, { ok: true, discordId: '123456789', balance: 250, linked: true, mcUsername: 'Steve' });
+  assert.deepEqual(acc, { ok: true, discordId: '123456789', balance: 250, linked: true, mcUsername: 'Steve', rank: 2 });
 
   poolRows = { rows: [{ discord_id: '1', mc_username: null, amount: '10' }], rowCount: 1 };
   const lb = await (await req('/v1/leaderboard?limit=5', { key: KEY })).json();
   assert.deepEqual(lb.leaderboard, [{ rank: 1, discordId: '1', mcUsername: null, balance: 10 }]);
 });
 
-test('reads: account transaction history shape', async () => {
+test('reads: account transaction history shape (with id for cursoring)', async () => {
   poolHandler = (sql) => sql.includes('FROM transactions t JOIN accounts a')
-    ? { rows: [{ delta: '50', balance_after: '250', reason: 'quest.win', source: 'bot:lisybot', ref_id: 'lisybot:q1', created_at: '2026-07-11T00:00:00Z' }] }
+    ? { rows: [{ id: '900', delta: '50', balance_after: '250', reason: 'quest.win', source: 'bot:lisybot', ref_id: 'lisybot:q1', created_at: '2026-07-11T00:00:00Z' }] }
     : undefined;
   try {
     const body = await (await req('/v1/accounts/123456789/transactions?limit=5', { key: KEY })).json();
     assert.deepEqual(body.transactions[0], {
-      delta: 50, balanceAfter: 250, reason: 'quest.win', source: 'bot:lisybot',
+      id: 900, delta: 50, balanceAfter: 250, reason: 'quest.win', source: 'bot:lisybot',
       refId: 'lisybot:q1', createdAt: '2026-07-11T00:00:00Z',
     });
+    assert.equal(body.nextBefore, null); // a short page has no next cursor
+  } finally {
+    poolHandler = null;
+  }
+});
+
+test('reads: account transactions accept a before cursor (id-based pagination)', async () => {
+  let seenSql;
+  poolHandler = (sql) => {
+    seenSql = sql.replace(/\s+/g, ' ');
+    return seenSql.includes('AND t.id < $3')
+      ? { rows: [
+          { id: '41', delta: '10', balance_after: '40', reason: 'discord.daily', source: 'bot', ref_id: null, created_at: '2026-07-01T00:00:00Z' },
+          { id: '40', delta: '10', balance_after: '30', reason: 'discord.daily', source: 'bot', ref_id: null, created_at: '2026-06-30T00:00:00Z' },
+        ], rowCount: 2 }
+      : undefined;
+  };
+  try {
+    const body = await (await req('/v1/accounts/123456789/transactions?limit=2&before=42', { key: KEY })).json();
+    assert.match(seenSql, /AND t\.id < \$3/);
+    assert.match(seenSql, /LIMIT \$2/); // limit still clamped
+    assert.equal(body.nextBefore, 40); // oldest id on the page - pass as the next ?before
+    assert.deepEqual(body.transactions.map((t) => t.id), [41, 40]);
   } finally {
     poolHandler = null;
   }
@@ -189,16 +212,24 @@ test('stats/daily: day clamp is passed to SQL; rows map to shape', async () => {
   }
 });
 
-test('transactions/recent: global feed shape', async () => {
-  poolHandler = (sql) => sql.includes('ORDER BY t.created_at DESC, t.id DESC')
-    ? { rows: [{ discord_id: '123', mc_username: 'Steve', delta: '-50', balance_after: '100', reason: 'casino.slots.wager', source: 'plugin:casino', created_at: '2026-07-11T00:00:00Z' }] }
-    : undefined;
+test('transactions/recent: global feed shape + before cursor', async () => {
+  poolHandler = (sql, params) => {
+    if (!sql.includes('ORDER BY t.id DESC')) return undefined;
+    if (sql.includes('WHERE t.id < $2')) {
+      assert.deepEqual(params, [5, 500]);
+      return { rows: [{ id: '499', discord_id: '123', mc_username: 'Steve', delta: '-50', balance_after: '100', reason: 'casino.slots.wager', source: 'plugin:casino', created_at: '2026-07-11T00:00:00Z' }] };
+    }
+    return { rows: [{ id: '501', discord_id: '123', mc_username: 'Steve', delta: '-50', balance_after: '100', reason: 'casino.slots.wager', source: 'plugin:casino', created_at: '2026-07-11T00:00:00Z' }] };
+  };
   try {
     const body = await (await req('/v1/transactions/recent?limit=5', { key: KEY })).json();
     assert.deepEqual(body.transactions[0], {
-      discordId: '123', mcUsername: 'Steve', delta: -50, balanceAfter: 100,
+      id: 501, discordId: '123', mcUsername: 'Steve', delta: -50, balanceAfter: 100,
       reason: 'casino.slots.wager', source: 'plugin:casino', createdAt: '2026-07-11T00:00:00Z',
     });
+    const paged = await (await req('/v1/transactions/recent?limit=5&before=500', { key: KEY })).json();
+    assert.equal(paged.transactions[0].id, 499);
+    assert.equal(paged.nextBefore, null); // a short page has no next cursor
   } finally {
     poolHandler = null;
   }
@@ -306,4 +337,78 @@ test('by-mc is 404 when no account carries that username', async () => {
 test('by-mc is behind the same auth wall as every other read', async () => {
   const r = await req('/v1/accounts/by-mc/BlackCow');
   assert.equal(r.status, 401);
+});
+
+// -- community module reads (added from demo scenarios) ----------------------
+
+test('events: active events for timer bots', async () => {
+  poolHandler = (sql) => sql.includes('FROM events WHERE active = true')
+    ? { rows: [
+        { name: '두 배 드롭', kind: 'drop_rate', multiplier: '2', starts_at: '2026-09-08T00:00:00Z', ends_at: '2026-09-10T00:00:00Z' },
+        { name: '출석 보너스', kind: 'faucet_boost', multiplier: '1.5', starts_at: '2026-09-09T00:00:00Z', ends_at: null },
+      ], rowCount: 2 }
+    : undefined;
+  try {
+    const body = await (await req('/v1/events', { key: KEY })).json();
+    assert.equal(body.events.length, 2);
+    assert.deepEqual(body.events[0], {
+      name: '두 배 드롭', kind: 'drop_rate', multiplier: 2,
+      startsAt: '2026-09-08T00:00:00Z', endsAt: '2026-09-10T00:00:00Z',
+    });
+    assert.equal(body.events[1].endsAt, null); // no end date = runs until deactivated
+  } finally {
+    poolHandler = null;
+  }
+});
+
+test('events: empty list when nothing is active', async () => {
+  poolHandler = (sql) => sql.includes('FROM events WHERE active = true')
+    ? { rows: [], rowCount: 0 } : undefined;
+  try {
+    const body = await (await req('/v1/events', { key: KEY })).json();
+    assert.deepEqual(body, { ok: true, events: [] });
+  } finally {
+    poolHandler = null;
+  }
+});
+
+test('guilds: fund ranking with member counts', async () => {
+  poolHandler = (sql) => sql.includes('FROM guilds g LEFT JOIN guild_members m')
+    ? { rows: [
+        { name: '달빛기사단', fund_balance: '50000', members: '12' },
+        { name: '별빛상회', fund_balance: '1234', members: '3' },
+      ], rowCount: 2 }
+    : undefined;
+  try {
+    const body = await (await req('/v1/guilds?limit=10', { key: KEY })).json();
+    assert.deepEqual(body.guilds, [
+      { name: '달빛기사단', fund: 50000, members: 12 },
+      { name: '별빛상회', fund: 1234, members: 3 },
+    ]);
+  } finally {
+    poolHandler = null;
+  }
+});
+
+test('casino/history: per-day burn series with clamped days', async () => {
+  let seenParams;
+  poolHandler = (sql, params) => {
+    if (sql.includes('FROM casino_ledger') && sql.includes('- ($1 - 1)')) {
+      seenParams = params;
+      return { rows: [
+        { date: '2026-09-07', total_wagered: '500', total_paid_out: '450', net_burn: '50' },
+        { date: '2026-09-08', total_wagered: '800', total_paid_out: '900', net_burn: '-100' },
+      ], rowCount: 2 };
+    }
+    return undefined;
+  };
+  try {
+    const r = await req('/v1/casino/history?days=400', { key: KEY });
+    assert.equal(r.status, 200);
+    assert.deepEqual(seenParams, [90]); // clamped to 90
+    const body = await r.json();
+    assert.deepEqual(body.days[1], { date: '2026-09-08', wagered: 800, paidOut: 900, netBurn: -100 });
+  } finally {
+    poolHandler = null;
+  }
 });
