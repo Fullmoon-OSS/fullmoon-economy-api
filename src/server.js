@@ -298,7 +298,7 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     if (path === '/v1/casino/today') {
       const r = await pool.query(
         `SELECT game, total_wagered, total_paid_out, net_burn
-           FROM casino_ledger WHERE period = (now() AT TIME ZONE 'UTC')::date::text ORDER BY game`
+           FROM casino_ledger WHERE period = (now() AT TIME ZONE 'UTC')::date ORDER BY game`
       );
       return send(res, 200, {
         ok: true,
