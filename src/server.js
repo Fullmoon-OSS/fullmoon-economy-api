@@ -114,8 +114,9 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     if (txMatch) {
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 10, 1), 50);
       // before = id 커서: 이보다 오래된 항목만 (CSV 내보내기 같은 페이지네이션용).
+      // 유한 양수만 커서로 인정 — Infinity/NaN/음수는 첫 페이지로 폴백한다.
       const beforeRaw = Number(url.searchParams.get('before')) || 0;
-      const before = beforeRaw > 0 ? beforeRaw : null;
+      const before = Number.isFinite(beforeRaw) && beforeRaw > 0 ? Math.floor(beforeRaw) : null;
       const r = await pool.query(
         `SELECT t.id, t.delta, t.balance_after, t.reason, t.source, t.ref_id, t.created_at
          FROM transactions t JOIN accounts a ON a.id = t.account_id
@@ -270,7 +271,7 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     if (path === '/v1/transactions/recent') {
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 100);
       const beforeRaw = Number(url.searchParams.get('before')) || 0;
-      const before = beforeRaw > 0 ? beforeRaw : null;
+      const before = Number.isFinite(beforeRaw) && beforeRaw > 0 ? Math.floor(beforeRaw) : null;
       const r = await pool.query(
         `SELECT t.id, a.discord_id, a.mc_username, t.delta, t.balance_after, t.reason, t.source, t.created_at
            FROM transactions t JOIN accounts a ON a.id = t.account_id
@@ -316,11 +317,14 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     // GuildBoard, CasinoMonitor 시나리오). 같은 규칙: GET 전용, clamp, 원장 읽기.
 
     // EventScheduler가 쓰는 events 테이블의 진행 중 이벤트. 이벤트 타이머 봇이
-    // 폴링하는 용도 — 쓰기는 여전히 운영자 봇만 가능하다.
+    // 폴링하는 용도 — 쓰기는 여전히 운영자 봇만 가능하다. active는 운영자가
+    // endEvent로만 내리는 플래그라 시간 창을 여기서 자로 잘라야 진행 중이 맞다
+    // (봇의 eventBoost 판독기와 동일 조건).
     if (path === '/v1/events') {
       const r = await pool.query(
         `SELECT name, kind, multiplier, starts_at, ends_at
-           FROM events WHERE active = true
+           FROM events
+          WHERE active = true AND starts_at <= now() AND ends_at > now()
           ORDER BY starts_at ASC LIMIT 25`
       );
       return send(res, 200, {
@@ -358,7 +362,8 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     // 추론되어 'date - double precision' 연산자가 없다고 500이 난다.
     // 게임별 행을 일별로 합친다 (casino_ledger PK = (game, period)).
     if (path === '/v1/casino/history') {
-      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 90);
+      const d = Number(url.searchParams.get('days')) || 30;
+      const days = Math.min(Math.max(Math.floor(d), 1), 90);
       const r = await pool.query(
         `SELECT period::text AS date, SUM(total_wagered) AS total_wagered,
                 SUM(total_paid_out) AS total_paid_out, SUM(net_burn) AS net_burn

@@ -346,28 +346,33 @@ test('by-mc is behind the same auth wall as every other read', async () => {
 
 // -- community module reads (added from demo scenarios) ----------------------
 
-test('events: active events for timer bots', async () => {
-  poolHandler = (sql) => sql.includes('FROM events WHERE active = true')
-    ? { rows: [
-        { name: '두 배 드롭', kind: 'drop_rate', multiplier: '2', starts_at: '2026-09-08T00:00:00Z', ends_at: '2026-09-10T00:00:00Z' },
-        { name: '출석 보너스', kind: 'faucet_boost', multiplier: '1.5', starts_at: '2026-09-09T00:00:00Z', ends_at: null },
-      ], rowCount: 2 }
-    : undefined;
+test('events: active events for timer bots (time window enforced)', async () => {
+  let seenSql;
+  poolHandler = (sql) => {
+    seenSql = sql.replace(/\s+/g, ' ');
+    return sql.includes('FROM events') && sql.includes('starts_at <= now()') && sql.includes('ends_at > now()')
+      ? { rows: [
+          { name: '두 배 드롭', kind: 'drop_rate', multiplier: '2', starts_at: '2026-09-08T00:00:00Z', ends_at: '2026-09-10T00:00:00Z' },
+          { name: '출석 보너스', kind: 'faucet_boost', multiplier: '1.5', starts_at: '2026-09-09T00:00:00Z', ends_at: '2026-09-12T00:00:00Z' },
+        ], rowCount: 2 }
+      : undefined;
+  };
   try {
+    // 시간 창이 쿼리 안에 있어야 끝난 이벤트가 "진행 중"으로 못 나간다
     const body = await (await req('/v1/events', { key: KEY })).json();
+    assert.match(seenSql, /active = true AND starts_at <= now\(\) AND ends_at > now\(\)/);
     assert.equal(body.events.length, 2);
     assert.deepEqual(body.events[0], {
       name: '두 배 드롭', kind: 'drop_rate', multiplier: 2,
       startsAt: '2026-09-08T00:00:00Z', endsAt: '2026-09-10T00:00:00Z',
     });
-    assert.equal(body.events[1].endsAt, null); // no end date = runs until deactivated
   } finally {
     poolHandler = null;
   }
 });
 
 test('events: empty list when nothing is active', async () => {
-  poolHandler = (sql) => sql.includes('FROM events WHERE active = true')
+  poolHandler = (sql) => sql.includes('FROM events')
     ? { rows: [], rowCount: 0 } : undefined;
   try {
     const body = await (await req('/v1/events', { key: KEY })).json();

@@ -130,7 +130,7 @@ paths:
                       currency: { type: string, const: '원' }
                       balance: { type: number }
                       updatedAt: { type: string, format: date-time }
-                      rank: { type: [number, 'null'], description: Ledger ranking by balance (1 = richest); null while the balance is zero }
+                      rank: { type: [number, 'null'], description: Ledger ranking by balance (1 = richest). Ties share the same rank. null while the balance is zero }
                   transactions:
                     type: array
                     maxItems: 30
@@ -371,7 +371,7 @@ paths:
                         kind: { type: string, description: e.g. drop_rate, faucet_boost, casino_jackpot_boost }
                         multiplier: { type: number }
                         startsAt: { type: string, format: date-time }
-                        endsAt: { type: [string, 'null'], description: null = runs until deactivated }
+                        endsAt: { type: string, format: date-time, description: operator-set end time; the listing itself only returns events whose window is open }
   /v1/guilds:
     get:
       operationId: getGuilds
@@ -478,7 +478,7 @@ components:
         balance: { type: number }
         linked: { type: boolean, description: true when both a Discord id and an MC uuid are bound }
         mcUsername: { type: [string, 'null'] }
-        rank: { type: [number, 'null'], description: Ledger ranking by balance (1 = richest). null while the balance is zero - zero-balance accounts are unranked. }
+        rank: { type: [number, 'null'], description: Ledger ranking by balance (1 = richest). Ties share the same rank (competition ranking). null while the balance is zero - zero-balance accounts are unranked. }
     LedgerEntry:
       type: object
       properties:
