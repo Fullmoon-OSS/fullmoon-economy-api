@@ -96,6 +96,11 @@ test('reads: account 404 vs shape, leaderboard shape', async () => {
   const acc = await (await req('/v1/accounts/123456789', { key: KEY })).json();
   assert.deepEqual(acc, { ok: true, discordId: '123456789', balance: 250, linked: true, mcUsername: 'Steve', rank: 2 });
 
+  // 잔액 0이면 순위 자체가 없다 (SQL CASE의 ELSE NULL 경로).
+  poolRows = { rows: [{ discord_id: '123456789', mc_username: 'Steve', linked: true, amount: '0', rank: null }], rowCount: 1 };
+  const zero = await (await req('/v1/accounts/123456789', { key: KEY })).json();
+  assert.equal(zero.rank, null);
+
   poolRows = { rows: [{ discord_id: '1', mc_username: null, amount: '10' }], rowCount: 1 };
   const lb = await (await req('/v1/leaderboard?limit=5', { key: KEY })).json();
   assert.deepEqual(lb.leaderboard, [{ rank: 1, discordId: '1', mcUsername: null, balance: 10 }]);
@@ -292,7 +297,7 @@ test('by-mc returns the wallet and the newest 30 transactions for a linked usern
     seen.push({ sql, params });
     if (sql.includes('FROM accounts a LEFT JOIN balances b')) {
       return {
-        rows: [{ id: 7, discord_id: '12345678901234567', mc_username: 'BlackCow', linked: true, amount: '128450.0000', updated_at: new Date('2026-09-01T12:00:00Z') }],
+        rows: [{ id: 7, discord_id: '12345678901234567', mc_username: 'BlackCow', linked: true, amount: '128450.0000', updated_at: new Date('2026-09-01T12:00:00Z'), rank: '4' }],
         rowCount: 1,
       };
     }
@@ -312,7 +317,7 @@ test('by-mc returns the wallet and the newest 30 transactions for a linked usern
     assert.equal(r.status, 200);
     const body = await r.json();
     assert.equal(body.ok, true);
-    assert.deepEqual(body.wallet, { currency: '원', balance: 128450, updatedAt: '2026-09-01T12:00:00.000Z' });
+    assert.deepEqual(body.wallet, { currency: '원', balance: 128450, updatedAt: '2026-09-01T12:00:00.000Z', rank: 4 });
     assert.equal(body.transactions.length, 2);
     assert.equal(body.transactions[0].label, '상점 구매'); // bot-owned vocabulary, imported not forked
     assert.equal(body.transactions[1].at, '2026-08-22T09:02:00.000Z');
@@ -391,9 +396,10 @@ test('guilds: fund ranking with member counts', async () => {
 });
 
 test('casino/history: per-day burn series with clamped days', async () => {
-  let seenParams;
+  let seenSql; let seenParams;
   poolHandler = (sql, params) => {
-    if (sql.includes('FROM casino_ledger') && sql.includes('- ($1 - 1)')) {
+    if (sql.includes('FROM casino_ledger') && sql.includes('- ($1::int - 1)')) {
+      seenSql = sql.replace(/\s+/g, ' ');
       seenParams = params;
       return { rows: [
         { date: '2026-09-07', total_wagered: '500', total_paid_out: '450', net_burn: '50' },
@@ -406,6 +412,7 @@ test('casino/history: per-day burn series with clamped days', async () => {
     const r = await req('/v1/casino/history?days=400', { key: KEY });
     assert.equal(r.status, 200);
     assert.deepEqual(seenParams, [90]); // clamped to 90
+    assert.match(seenSql, /GROUP BY period/); // per-day aggregate, not per game×day
     const body = await r.json();
     assert.deepEqual(body.days[1], { date: '2026-09-08', wagered: 800, paidOut: 900, netBurn: -100 });
   } finally {

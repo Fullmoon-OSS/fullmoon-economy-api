@@ -130,6 +130,7 @@ paths:
                       currency: { type: string, const: '원' }
                       balance: { type: number }
                       updatedAt: { type: string, format: date-time }
+                      rank: { type: [number, 'null'], description: Ledger ranking by balance (1 = richest); null while the balance is zero }
                   transactions:
                     type: array
                     maxItems: 30
@@ -311,6 +312,9 @@ paths:
                         reason: { type: string }
                         source: { type: string }
                         createdAt: { type: string, format: date-time }
+                  nextBefore:
+                    type: [integer, 'null']
+                    description: Pass as the before query parameter to fetch the next (older) page; null when you have reached the beginning.
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /v1/casino/today:

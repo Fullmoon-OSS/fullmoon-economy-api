@@ -147,7 +147,10 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
       const acc = await pool.query(
         `SELECT a.id, a.discord_id, a.mc_username, a.linked_at IS NOT NULL AS linked,
                 COALESCE(b.amount, 0) AS amount,
-                COALESCE(b.updated_at, a.linked_at, now()) AS updated_at
+                COALESCE(b.updated_at, a.linked_at, now()) AS updated_at,
+                CASE WHEN COALESCE(b.amount, 0) > 0
+                     THEN (SELECT COUNT(*) + 1 FROM balances b2 WHERE b2.amount > b.amount)
+                     ELSE NULL END AS rank
          FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
          WHERE a.mc_username = $1
          ORDER BY a.linked_at DESC NULLS LAST LIMIT 1`,
@@ -169,6 +172,7 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
           currency: '원',
           balance: Number(row.amount),
           updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+          rank: row.rank === null ? null : Number(row.rank),
         },
         transactions: tx.rows.map((t) => ({
           delta: Number(t.delta),
@@ -350,12 +354,17 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
     }
 
     // 카지노 건전성 모니터용 일별 이력: net_burn >= 0이면 디플레이션 정상.
+    // period는 DATE 컬럼 — $1::int 캐스트가 없으면 파라미터가 float8으로
+    // 추론되어 'date - double precision' 연산자가 없다고 500이 난다.
+    // 게임별 행을 일별로 합친다 (casino_ledger PK = (game, period)).
     if (path === '/v1/casino/history') {
       const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 90);
       const r = await pool.query(
-        `SELECT period::text AS date, total_wagered, total_paid_out, net_burn
+        `SELECT period::text AS date, SUM(total_wagered) AS total_wagered,
+                SUM(total_paid_out) AS total_paid_out, SUM(net_burn) AS net_burn
            FROM casino_ledger
-          WHERE period >= (now() AT TIME ZONE 'UTC')::date - ($1 - 1)
+          WHERE period >= (now() AT TIME ZONE 'UTC')::date - ($1::int - 1)
+          GROUP BY period
           ORDER BY period ASC`,
         [days]
       );

@@ -95,9 +95,10 @@ nginx의 IP당 10 req/s(burst 40) 제한은 **앱 리미터가 못 막는 구간
 
 ```json
 { "ok": true,
-  "wallet": { "currency": "원", "balance": 1234, "updatedAt": "..." },
+  "wallet": { "currency": "원", "balance": 1234, "updatedAt": "...", "rank": 4 },
   "transactions": [{ "delta": 5, "reason": "economy.playtime", "label": "플레이타임", "balanceAfter": 1234, "at": "..." }] }
 ```
+`rank`는 잔액 순위예요 (잔액 0이면 null).
 
 `label`은 원장 vocabulary가 붙여주는 한글 표시명이에요(`src/vocabulary/txLabel.js`
 — 운영 봇과 동기화된 사본이에요). 연동 계정이 없으면 404가 돌아와요.
