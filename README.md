@@ -132,9 +132,10 @@ nginx의 IP당 10 req/s(burst 40) 제한은 **앱 리미터가 못 막는 구간
 ### `GET /v1/stats/daily?days=14` (days ≤ 90)
 일별 시계열이에요: `{ date, mint, burn, casinoNet, auctionNet, dropNet, shopNet, net, activeAccounts }[]` — 그래프용이에요.
 
-### `GET /v1/transactions/recent?limit=20` (limit ≤ 100)
-전역 거래 피드(계정 정보 조인)예요 — 라이브 피드/감사 뷰용이에요. 폴링 권장 주기는
-5초 이상이에요.
+### `GET /v1/transactions/recent?limit=20&before=<id>` (limit ≤ 100)
+전역 거래 피드(계정 정보 조인)예요 — 라이브 피드/감사 뷰용. 폴링 권장 주기는
+5초 이상이에요. 각 항목의 `id`를 `before`로 넘기면 이전 페이지가 나와요
+(`nextBefore` 반환, 더 없으면 null).
 
 ### `GET /v1/casino/today`
 `casino_ledger` 오늘 스냅샷이에요: 게임별 `{ game, wagered, paidOut, netBurn }`.
