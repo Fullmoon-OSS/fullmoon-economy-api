@@ -88,11 +88,17 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
 
     const accountMatch = path.match(/^\/v1\/accounts\/(\d{5,25})$/);
     if (accountMatch) {
+      // rank tiebreak = accounts.id ASC. Same rule as the bot's built-in
+      // balanceRank (coin-bridge-bot db.js) and its community-module reader
+      // (economyReader.js) — three copies; change them together.
       const r = await pool.query(
         `SELECT a.discord_id, a.mc_username, a.linked_at IS NOT NULL AS linked,
                 COALESCE(b.amount, 0) AS amount,
                 CASE WHEN COALESCE(b.amount, 0) > 0
-                     THEN (SELECT COUNT(*) + 1 FROM balances b2 WHERE b2.amount > b.amount)
+                     THEN (SELECT COUNT(*) + 1
+                             FROM balances b2 JOIN accounts a2 ON a2.id = b2.account_id
+                            WHERE b2.amount > b.amount
+                               OR (b2.amount = b.amount AND a2.id < a.id))
                      ELSE NULL END AS rank
          FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
          WHERE a.discord_id = $1`,
@@ -150,7 +156,10 @@ export function createEconomyApi({ clients, pool, rateLimit = { windowMs: 10_000
                 COALESCE(b.amount, 0) AS amount,
                 COALESCE(b.updated_at, a.linked_at, now()) AS updated_at,
                 CASE WHEN COALESCE(b.amount, 0) > 0
-                     THEN (SELECT COUNT(*) + 1 FROM balances b2 WHERE b2.amount > b.amount)
+                     THEN (SELECT COUNT(*) + 1
+                             FROM balances b2 JOIN accounts a2 ON a2.id = b2.account_id
+                            WHERE b2.amount > b.amount
+                               OR (b2.amount = b.amount AND a2.id < a.id))
                      ELSE NULL END AS rank
          FROM accounts a LEFT JOIN balances b ON b.account_id = a.id
          WHERE a.mc_username = $1
