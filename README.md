@@ -169,7 +169,7 @@ const body = await res.json();
 reply(body.ok ? `잔액 ${body.balance}` : '아직 지갑이 없어요');
 ```
 
-[fullmoon-sdk](https://github.com/Fullmoon-OSS/fullmoon-sdk)의 `economyClient.js`가
+[fullmoon-sdk](https://github.com/fullmoon-network/fullmoon-sdk)의 `economyClient.js`가
 이걸 감싼 공식 클라이언트예요(의존성 없음).
 
 ## 동기화 메모 (운영자용)

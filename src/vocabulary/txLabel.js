@@ -1,7 +1,7 @@
 // SYNCED COPY — the canonical source lives in the operator monorepo:
 //   coin-bridge-bot/src/economy/txLabel.js
 // Edit there first, then copy this file byte-for-byte and bump the sync date.
-// Synced: 2026-09-08 (Fullmoon-OSS extraction).
+// Synced: 2026-09-08 (fullmoon-network extraction).
 //
 // Ledger `reason` codes → Korean, in one place.
 //

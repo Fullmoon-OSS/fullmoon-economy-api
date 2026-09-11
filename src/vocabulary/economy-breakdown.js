@@ -3,7 +3,7 @@
 // Edit there first, then copy this file byte-for-byte and bump the sync date.
 // A divergent copy becomes a second definition of "what counts as mint/burn",
 // and the disagreement shows up as dashboards that disagree with /경제현황.
-// Synced: 2026-09-08 (Fullmoon-OSS extraction).
+// Synced: 2026-09-08 (fullmoon-network extraction).
 //
 // Pure transforms + SQL predicate fragments for economy measurement. Extracted
 // from db.js (which throws on import without DATABASE_URL) so the shape

@@ -23,7 +23,7 @@ info:
     nginx layer 10 req/s per IP, burst 40.
 
     Client: the official zero-dependency JS client is
-    https://github.com/Fullmoon-OSS/fullmoon-sdk (economyClient.js).
+    https://github.com/fullmoon-network/fullmoon-sdk (economyClient.js).
 servers:
   - url: https://api.fullmoon.ink/economy
     description: Public entry (nginx TLS termination, /economy prefix stripped by proxy_pass)

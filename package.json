@@ -15,7 +15,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Fullmoon-OSS/fullmoon-economy-api.git"
+    "url": "git+https://github.com/fullmoon-network/fullmoon-economy-api.git"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

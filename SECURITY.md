@@ -18,4 +18,4 @@
   쓰는 경로가 코드에 없어요.
 - 경제 API는 읽기 전용이라 유출 가능한 쓰기 권한이 없어요 (키 = 읽기).
 
-자세한 정책: [fullmoon-docs/docs/policies.md](https://github.com/Fullmoon-OSS/fullmoon-docs/blob/main/docs/policies.md)
+자세한 정책: [fullmoon-docs/docs/policies.md](https://github.com/fullmoon-network/fullmoon-docs/blob/main/docs/policies.md)
